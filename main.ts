@@ -1,63 +1,64 @@
-// News Image — 20 November 2026
-// Copies the finished front page (entry.png) into the output directory,
-// after checking that it is a real PNG file of the required size.
+// News Image entry for Friday, 20 November 2026.
+// Takes the finished front page (entry.png, kept next to this file),
+// checks it is really the image the bounty asks for, and places a
+// copy in the output directory the harness reads from.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Every PNG file begins with this exact 8-byte signature.
-const PNG_SIGNATURE: Buffer = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
+// What the bounty requires of the image.
+const EXPECTED = { width: 1024, height: 1024, maxBytes: 1024 * 1024 };
 
-// The entry must be a 1024 x 1024 PNG of at most 1 MiB.
-const REQUIRED_WIDTH = 1024;
-const REQUIRED_HEIGHT = 1024;
-const MAX_BYTES = 1048576;
+// The first eight bytes of every PNG file, in order.
+const MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-const scriptDir: string = dirname(fileURLToPath(import.meta.url));
-const sourcePath: string = join(scriptDir, "entry.png");
-const outputDir: string = process.env.MAKEFUN_OUTPUT_DIR || "/output";
-const targetPath: string = join(outputDir, "entry.png");
-
-const image: Buffer = readFileSync(sourcePath);
-
-// A PNG file always starts with these 8 bytes. If they do not match, the
-// file is not a PNG (or it is damaged), so stop here instead of copying
-// bad data into the output directory.
-if (
-  image.length < PNG_SIGNATURE.length ||
-  !image.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
-) {
-  const seen: string = image.subarray(0, 8).toString("hex");
-  throw new Error(
-    `entry.png is not a valid PNG file: its first bytes are ${seen}, ` +
-      "but a PNG must start with 89504e470d0a1a0a.",
-  );
+function fail(message: string): never {
+  throw new Error("entry.png failed validation: " + message);
 }
 
-// The first chunk of a PNG is IHDR (13 bytes): width and height are the
-// first two 4-byte big-endian integers after the chunk length and type.
-if (image.length < 33 || image.toString("ascii", 12, 16) !== "IHDR") {
-  throw new Error("entry.png has no IHDR chunk where a PNG must have one.");
-}
-const width: number = image.readUInt32BE(16);
-const height: number = image.readUInt32BE(20);
-if (width !== REQUIRED_WIDTH || height !== REQUIRED_HEIGHT) {
-  throw new Error(
-    `entry.png is ${width}x${height}, but the entry must be ` +
-      `${REQUIRED_WIDTH}x${REQUIRED_HEIGHT}.`,
-  );
+// Read the image and make sure it is a 1024x1024 PNG under the 1 MiB
+// limit before anything is copied. A bad file must stop the run here,
+// not land in the output directory.
+function validateEntry(bytes: Buffer): void {
+  for (let i = 0; i < MAGIC.length; i++) {
+    if (bytes[i] !== MAGIC[i]) {
+      fail(
+        "not a PNG file (first bytes are " +
+          bytes.subarray(0, 8).toString("hex") +
+          ", expected 89504e470d0a1a0a)",
+      );
+    }
+  }
+
+  // Width and height live in the IHDR chunk: bytes 16-19 and 20-23,
+  // each a big-endian 32-bit integer.
+  if (bytes.length < 24 || bytes.toString("ascii", 12, 16) !== "IHDR") {
+    fail("missing the IHDR chunk a PNG must start with");
+  }
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (width !== EXPECTED.width || height !== EXPECTED.height) {
+    fail(
+      `is ${width}x${height}, expected ` +
+        `${EXPECTED.width}x${EXPECTED.height}`,
+    );
+  }
+
+  if (bytes.length > EXPECTED.maxBytes) {
+    fail(
+      `is ${bytes.length} bytes, over the ` +
+        `${EXPECTED.maxBytes} byte limit`,
+    );
+  }
 }
 
-if (image.length > MAX_BYTES) {
-  throw new Error(
-    `entry.png is ${image.length} bytes, over the 1 MiB limit ` +
-      `(${MAX_BYTES} bytes).`,
-  );
-}
+const here = dirname(fileURLToPath(import.meta.url));
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
-mkdirSync(outputDir, { recursive: true });
-writeFileSync(targetPath, image);
-console.log(`Wrote ${targetPath}`);
+const image = readFileSync(join(here, "entry.png"));
+validateEntry(image);
+
+mkdirSync(outDir, { recursive: true });
+writeFileSync(join(outDir, "entry.png"), image);
+console.log("entry.png written to " + outDir);
